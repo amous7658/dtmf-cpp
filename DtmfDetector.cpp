@@ -7,7 +7,9 @@
 
 #include <cassert>
 #include "DtmfDetector.hpp"
-
+#ifdef WIDEBAND_SUPPORT
+#include <stdio.h>
+#endif
 #if DEBUG
 #include <cstdio>
 #endif
@@ -117,6 +119,13 @@ static inline INT16 norm_l(INT32 L_var1)
 
 const UINT32 DtmfDetectorInterface::NUMBER_OF_BUTTONS;
 const unsigned DtmfDetector::COEFF_NUMBER;
+#ifdef WIDEBAND_SUPPORT
+INT32 DtmfDetector::powerThreshold = 328;
+const INT16 DtmfDetector::CONSTANTS[COEFF_NUMBER] = {31547,31280,30950,30554,29141,28357,27405,26253,27976,26952,25696,24212,19062,16313,13071,9299};
+const UINT32 DtmfDetector::SAMPLES = 205;
+INT32 DtmfDetector::dialTonesToOhersDialTones = 4;
+INT32 DtmfDetector::dialTonesToOhersTones = 10;
+#else
 // These frequencies are slightly different to what is in the generator.
 // More importantly, they are also different to what is described at:
 // http://en.wikipedia.org/wiki/Dual-tone_multi-frequency_signaling
@@ -184,6 +193,7 @@ INT32 DtmfDetector::powerThreshold = 328;
 INT32 DtmfDetector::dialTonesToOhersTones = 16;
 INT32 DtmfDetector::dialTonesToOhersDialTones = 6;
 const INT32 DtmfDetector::SAMPLES = 102;
+#endif
 //--------------------------------------------------------------------
 DtmfDetector::DtmfDetector(INT32 frameSize_): frameSize(frameSize_)
 {
@@ -196,6 +206,13 @@ DtmfDetector::DtmfDetector(INT32 frameSize_): frameSize(frameSize_)
     frameCount = 0;
     prevDialButton = ' ';
     permissionFlag = 0;
+#ifdef WIDEBAND_SUPPORT
+	sample_count = 0;
+	sample_count_flag = 0;
+	pattern_tone = ' ';
+	detected_tone = ' ';
+	pattern_count = 0;
+#endif	
 }
 //---------------------------------------------------------------------
 DtmfDetector::~DtmfDetector()
@@ -204,6 +221,94 @@ DtmfDetector::~DtmfDetector()
     delete [] internalArray;
 }
 
+#ifdef WIDEBAND_SUPPORT
+char temp_dial_button;
+char DtmfDetector::dtmfDetecting(INT16 input_array[], UINT32* p_pValid )
+{
+    UINT32 ii;
+
+    if ( NULL != p_pValid )
+    {
+        *p_pValid = 0;
+    }
+    for(ii=0; ii < frameSize; ii++)
+    {
+        pArraySamples[ii + frameCount] = input_array[ii];
+    }
+
+    frameCount += frameSize;
+    UINT32 temp_index = 0;
+    if(frameCount >= SAMPLES)
+    { 
+        while(frameCount >= SAMPLES)
+        {
+            temp_dial_button = DTMF_detection(&pArraySamples[temp_index]); 
+
+            if(permissionFlag)
+            {
+                if((temp_dial_button != ' ')&&(pattern_tone == temp_dial_button))
+                {
+                    if(sample_count < 15)
+                    {
+						pattern_count++;
+                    }
+                }
+            }
+			else
+			{
+				if ( ( temp_dial_button != ' ' ) && (prevDialButton == ' ') )
+	            {
+	                permissionFlag = 1;
+					sample_count_flag = 1;
+					pattern_count = 1;
+					pattern_tone = temp_dial_button;
+				}
+				if ( NULL != p_pValid )
+				{
+					*p_pValid = 0;
+				}
+			}
+            
+			if(sample_count_flag)
+			{
+				if(sample_count < 15)
+				{
+					sample_count++;
+				}
+			}
+			if(15 == sample_count)
+			{
+				if(pattern_count >= 2)
+				{
+					if ( NULL != p_pValid )
+					{
+						*p_pValid = 1;
+						detected_tone = pattern_tone;
+					}
+				}
+				sample_count = 0;
+				pattern_count = 0;
+				pattern_tone = ' ';
+				permissionFlag = 0;
+				sample_count_flag = 0;
+			}
+            //printf("DtmfDetector:temp_dial_button=%c\n",temp_dial_button);
+            prevDialButton = temp_dial_button;
+            temp_index += SAMPLES;
+            frameCount -= SAMPLES;
+        }
+
+        for(ii=0; ii < frameCount; ii++)
+        {
+            pArraySamples[ii] = pArraySamples[ii + temp_index];
+        }        
+    }
+    if(!(*p_pValid))
+    return temp_dial_button;
+    else
+    	return detected_tone;
+}
+#else
 void DtmfDetector::dtmfDetecting(INT16 input_array[])
 {
     // ii                   Variable for iteration
@@ -288,6 +393,7 @@ void DtmfDetector::dtmfDetecting(INT16 input_array[])
     }
 
 }
+#endif
 //-----------------------------------------------------------------
 // Detect a tone in a single batch of samples (SAMPLES elements).
 char DtmfDetector::DTMF_detection(INT16 short_array_samples[])
@@ -296,7 +402,13 @@ char DtmfDetector::DTMF_detection(INT16 short_array_samples[])
     char return_value=' ';
     unsigned ii;
     Sum = 0;
-
+#ifdef WIDEBAND_SUPPORT
+	static char last_detected_val = ' ';
+	int exit_out = 0;
+	int ratio = 0;
+    do
+    {
+#endif
     // Dial         TODO: what is this?
     // Sum          Sum of the absolute values of samples in the batch.
     // return_value The tone detected in this batch (can be silence).
@@ -311,8 +423,16 @@ char DtmfDetector::DTMF_detection(INT16 short_array_samples[])
             Sum -= short_array_samples[ii];
     }
     Sum /= SAMPLES;
+
+#ifdef WIDEBAND_SUPPORT
+    if(Sum < powerThreshold) 
+        {
+            break;
+        }
+#else
     if(Sum < powerThreshold)
         return ' ';
+#endif
 
     //Normalization
     // Iterate over each sample.  
@@ -348,7 +468,9 @@ char DtmfDetector::DTMF_detection(INT16 short_array_samples[])
     goertzel_filter(CONSTANTS[10], CONSTANTS[11], internalArray, &T[10], &T[11], SAMPLES);
     goertzel_filter(CONSTANTS[12], CONSTANTS[13], internalArray, &T[12], &T[13], SAMPLES);
     goertzel_filter(CONSTANTS[14], CONSTANTS[15], internalArray, &T[14], &T[15], SAMPLES);
+#ifndef WIDEBAND_SUPPORT
     goertzel_filter(CONSTANTS[16], CONSTANTS[17], internalArray, &T[16], &T[17], SAMPLES);
+#endif
 
 #if DEBUG
     for (ii = 0; ii < COEFF_NUMBER; ++ii)
@@ -386,7 +508,11 @@ char DtmfDetector::DTMF_detection(INT16 short_array_samples[])
 
     Sum=0;
     //Find average value dial tones without max row and max column
+#ifdef WIDEBAND_SUPPORT
+	for (ii = 0; ii < 8; ii++)
+#else
     for(ii = 0; ii < 10; ii++)
+#endif
     {
         Sum += T[ii];
     }
@@ -398,7 +524,113 @@ char DtmfDetector::DTMF_detection(INT16 short_array_samples[])
     // N.B. looks like avoiding a divide by zero.
     if(!Sum)
         Sum = 1;
+#ifdef WIDEBAND_SUPPORT
+		if(T[Row]/Sum < dialTonesToOhersDialTones)
+        {
+            break;
+        }
+        if(T[Column]/Sum < dialTonesToOhersDialTones)
+        {
+            break;
+        }
 
+        //If relations max colum to max row is large then 4 then return
+		// Positive twist should not be greater than 6db
+		if (((3 == Row) && (5 == Column)) || ((0 == Row) && (4 == Column))){
+			ratio = T[Column] / T[Row];
+			if ((ratio >= 2) && (ratio <= 1))
+			{
+				//return_value = last_detected_val;  // this logic should probably match the logic 6 lines below; kdf
+				exit_out = 1;
+				//printf("Positive Twist test failed  T[Row: %d] : %d, T[Column: %d] : %d\n", Row, T[Row], Column, T[Column]);
+				printf("Ratio = %d, Row %d Column %d\n", (T[Column] / T[Row]),Row, Column);
+				break;
+			}
+        }
+		if (exit_out)
+		{
+			exit_out = 0;
+			break;
+		}
+        //If relations max colum to max row is large then 4 then return ; // kdf comment does match code; code is T[col] < ((3/8) * T[Row])
+		//if (((T[Column] << 2) - (T[Column] << 1)) < ((T[Row] << 1)))
+		if (T[Column] < (T[Row] >> 1))
+        {// why not adjusting the return_value as in just above.  The part above is not logical kdf
+			//exit_out = 1;
+			//printf("Negative Twist test failed  T[Row] : %d, T[Column] : %d\n", T[Row], T[Column]);
+            break;
+        }
+		if (exit_out)
+		{
+			exit_out = 0;
+			break;
+		}
+
+        for (ii = 0; ii < 16; ii++)
+        if (T[ii] == 0)
+            T[ii] = 1;
+
+        //If relations max row and max column to all other tones are less then
+        //threshold then return
+        //for (ii = 8; ii < 16; ii++)
+        {
+            if ((T[Row] / T[(Row + 8)] )< dialTonesToOhersTones)
+            {
+                exit_out = 1;
+                break;
+            }
+            if ((T[Column] / T[(Column+8)]) < dialTonesToOhersTones)
+            {
+                exit_out = 1;
+                break;
+            }
+        }
+        if ( exit_out )
+        {
+            exit_out = 0;
+            break;
+        }
+		
+
+
+    //If relations max row and max column tones to other dial tones are
+    //less then threshold then return  
+    for(ii = 0; ii < 8; ii ++)
+    {
+        if(T[ii] != T[Column])
+        {
+            if(T[ii] != T[Row])
+            {
+                if(T[Row]/T[ii] < dialTonesToOhersDialTones) 
+                    {
+                        exit_out = 1;
+                        break;
+                    }
+                if(Column != 4)
+                {
+                    if(T[Column]/T[ii] < dialTonesToOhersDialTones) 
+                        {
+                            exit_out = 1;
+                            break;
+                        }
+                    }
+                    else
+                {
+                        if (T[Column] / T[ii] < (dialTonesToOhersDialTones))
+                        {
+                            exit_out = 1;
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+        if ( exit_out )
+        {
+            exit_out = 0;
+            break;
+	    }
+#else
     //If relations max row and max column to average value
     //are less then threshold then return
     // This means the tones are too quiet compared to the other, non-max
@@ -469,7 +701,7 @@ char DtmfDetector::DTMF_detection(INT16 short_array_samples[])
             }
         }
     }
-
+#endif
     //We are choosed a push button
     // Determine the tone based on the row and column frequencies.
     switch (Row)
@@ -542,6 +774,14 @@ char DtmfDetector::DTMF_detection(INT16 short_array_samples[])
             break;
         }
     }
+#ifdef WIDEBAND_SUPPORT
+    } while ( 0 );
+    if ( last_detected_val != return_value )
+    {
+        last_detected_val = return_value;
+    // printf( "From DtmfDetector::DTMF_detection() val ret = %c\n", return_value );
+    }
+#endif
 
     return return_value;
 }
