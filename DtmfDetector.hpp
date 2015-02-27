@@ -10,7 +10,8 @@
 #define DTMF_DETECTOR
 
 #include "types_cpp.hpp"
-
+//Uncomment WIDEBAND_SUPPORT to enable it. Works only for DTMF 1 and 0 detections
+//#define WIDEBAND_SUPPORT
 
 typedef Types<sizeof(long int), sizeof(int), sizeof(short int), sizeof(char)>::Int32     INT32;
 typedef Types<sizeof(long int), sizeof(int), sizeof(short int), sizeof(char)>::Uint32    UINT32;
@@ -31,7 +32,9 @@ public:
     // NUL-terminated.
     char dialButtons[NUMBER_OF_BUTTONS];
     // A constant pointer to expose dialButtons for read-only access
+	#ifndef WIDEBAND_SUPPORT
     char *const pDialButtons;
+    #endif
     // The number of tones detected (stored in dialButtons)
     mutable INT16 indexForDialButtons;
 public:
@@ -40,18 +43,23 @@ public:
     {
         return indexForDialButtons;
     }
+   	#ifndef WIDEBAND_SUPPORT
     char *getDialButtonsArray() // Address of array, where store detected push buttons
     const
     {
         return pDialButtons;
     }
+    #endif
     void zerosIndexDialButton() // Zeros of a detected button array
     const
     {
         indexForDialButtons = 0;
     }
-
+	#ifdef WIDEBAND_SUPPORT
+	DtmfDetectorInterface():indexForDialButtons(0)
+	#else
     DtmfDetectorInterface():indexForDialButtons(0), pDialButtons(dialButtons)
+    #endif
     {
         dialButtons[0] = 0;
     }
@@ -73,13 +81,20 @@ protected:
     INT16  *internalArray;
     // The size of the entire buffer used for processing samples.  
     // Specified at construction time.
+#ifndef WIDEBAND_SUPPORT
     const INT32 frameSize; //Size of a frame is measured in INT16(word)
+#endif
     // The number of samples to utilize in a single call to Goertzel.
     // This is referred to as a frame.
+    #ifdef WIDEBAND_SUPPORT
+    static const UINT32 SAMPLES;
+    UINT32 frameCount;
+    #else
     static const INT32 SAMPLES;
     // This gets used for a variety of purposes.  Most notably, it indicates
     // the start of the circular buffer at the start of ::dtmfDetecting.
     INT32 frameCount;
+    #endif
     // The tone detected by the previous call to DTMF_detection.
     char prevDialButton;
     // This flag is used to aggregate adjacent tones and spaces, i.e.
@@ -97,7 +112,13 @@ protected:
     //
     // 111111   222222 -> 1111122222
     char permissionFlag;
-
+#ifdef WIDEBAND_SUPPORT
+	char pattern_tone;
+	UINT32 sample_count_flag;
+	UINT32 sample_count;
+	UINT32 pattern_count;
+	char detected_tone;
+#endif
     // Used for quickly determining silence within a batch.
     static INT32 powerThreshold;
     //
@@ -114,12 +135,17 @@ protected:
     // This protected function determines the tone present in a single frame.
     char DTMF_detection(INT16 short_array_samples[]);
 public:
-
+#ifdef WIDEBAND_SUPPORT
+    const UINT32 frameSize; //Size of a frame is measured in INT16(word)
+#endif
     // frameSize_ - input frame size
     DtmfDetector(INT32 frameSize_);
     ~DtmfDetector();
-
+#ifdef WIDEBAND_SUPPORT
+    char dtmfDetecting(INT16 inputFrame[], UINT32* p_pValid); // The DTMF detection.
+#else
     void dtmfDetecting(INT16 inputFrame[]); // The DTMF detection.
+#endif
     // The size of a inputFrame must be equal of a frameSize_, who
     // was set in constructor.
 };
